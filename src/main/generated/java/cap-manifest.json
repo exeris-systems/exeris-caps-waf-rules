@@ -1,0 +1,29 @@
+{
+  "schemaVersion" : 2,
+  "stamp" : {
+    "validated" : true,
+    "compositionVersion" : "0.0.0",
+    "contentBinding" : "sha256:8927abbe89ed852e8effa4f1d59f82f71bd2705467c27521a9400b4bcfd47833"
+  },
+  "modules" : [
+    {
+      "name" : "WafModule",
+      "packageName" : "eu.exeris.caps.waf",
+      "qualifiedName" : "eu.exeris.caps.waf.WafModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.waf.api.WafPolicy",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [ ]
+      }
+    }
+  ],
+  "resolutions" : [ ],
+  "initOrder" : [
+    "eu.exeris.caps.waf.WafModule"
+  ],
+  "warnings" : [ ]
+}

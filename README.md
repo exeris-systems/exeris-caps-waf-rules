@@ -7,7 +7,7 @@ Status: proof of concept, built against `exeris-kernel` 0.13.0-SNAPSHOT on JDK 2
 ## Where it sits
 
 - **Layer:** Layer 3 — Gateway policy, in the Tier 2 capability map of [`high-level-architecture.md`](https://github.com/exeris-systems/exeris-docs/blob/main/high-level-architecture.md) §3.2.
-- **Depends on:** nothing beyond `exeris-sdk-annotations` (`provided`). `WafPolicy` is a pure function from an immutable `WafRequest` to a `WafDecision` and has no transport, socket or kernel coupling.
+- **Depends on:** `exeris-kernel-spi` (the entitlement requirement) and `exeris-sdk-annotations` (`provided`). `WafPolicy` is a pure function from an immutable `WafRequest` to a `WafDecision` and has no transport, socket or kernel coupling.
 - **Provides** (`@Provides`, contract version 0.1.0): `WafPolicy`.
 - **Requires:** no other capability.
 - **Wall (ADR-055):** `eu.exeris.caps.waf.api` is the cross-cap surface; `eu.exeris.caps.waf.internal` is private, and a sibling cap reaching into it fails the build. No Spring, servlet, Netty or reactive type may appear (ADR-006).
