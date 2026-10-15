@@ -1,3 +1,12 @@
+---
+title: "exeris-caps-waf-rules — Roadmap"
+type: roadmap
+visibility: public
+owning-repo: exeris-caps-waf-rules
+status: active
+last-verified: 2026-10-15
+---
+
 # exeris-caps-waf-rules — Roadmap
 
 Status: **poc**. Version line: **0.1.x**. Licence: Exeris Commercial License (ADR-023), entitlement id
