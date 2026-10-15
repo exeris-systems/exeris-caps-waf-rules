@@ -3,8 +3,8 @@ package eu.exeris.caps.waf.api;
 /**
  * Service contract for evaluating inbound requests against Layer 7 application security rules.
  *
- * <p>Implemented as a pure function: takes an immutable {@link WafRequest} and returns a
- * {@link WafDecision}. Zero transport, socket, or kernel coupling (ADR-055).
+ * <p>Takes an immutable {@link WafRequest} and returns a {@link WafDecision}, keeping no state between calls.
+ * The contract names no transport, socket or kernel type (ADR-055).
  *
  * @since 0.1.0
  */

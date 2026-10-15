@@ -2,6 +2,8 @@ package eu.exeris.caps.waf.internal;
 
 import eu.exeris.caps.waf.api.WafRule;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -214,6 +216,24 @@ public final class FastKeywordTrie {
         int state = 0;
         for (int i = 0; i < length; i++) {
             state = next[state * classes + classOf(text[i])];
+            int rule = out[state];
+            if (rule >= 0) {
+                return rule;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Scans the first {@code length} UTF-16 code units held in {@code text}, which are read as
+     * {@link ValueLayout#JAVA_CHAR} at index {@code 0} to {@code length - 1}, in a single pass. Allocation-free.
+     *
+     * @return the index, in {@link #rules()}, of the first rule matched, or -1
+     */
+    public int findFirstMatchIndex(MemorySegment text, int length) {
+        int state = 0;
+        for (int i = 0; i < length; i++) {
+            state = next[state * classes + classOf(text.getAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i))];
             int rule = out[state];
             if (rule >= 0) {
                 return rule;

@@ -3,6 +3,8 @@ package eu.exeris.caps.waf.api;
 import eu.exeris.caps.waf.internal.CoreWafRuleSet;
 import eu.exeris.caps.waf.internal.DefaultWafPolicy;
 
+import eu.exeris.kernel.spi.memory.MemoryAllocator;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,6 +37,20 @@ public final class WafPolicies {
     }
 
     /**
+     * Creates a {@link WafPolicy} with the default Core Rule Set in the specified mode, which borrows the room it
+     * decodes percent-encoding into from {@code allocator}.
+     *
+     * @param mode      enforcement mode
+     * @param allocator where an evaluation borrows decode room, for a caller that evaluates where the kernel has
+     *                  not bound its allocator; {@code null} reads {@code KernelProviders.MEMORY_ALLOCATOR} when
+     *                  it is bound at the evaluation, as for {@link #defaultCoreRules(WafMode)}
+     * @return configured WAF policy
+     */
+    public static WafPolicy defaultCoreRules(WafMode mode, MemoryAllocator allocator) {
+        return new DefaultWafPolicy(mode, CoreWafRuleSet.defaultRules(), allocator);
+    }
+
+    /**
      * Creates a new fluent {@link Builder} to construct a customized WAF policy.
      *
      * @return builder
@@ -49,6 +65,7 @@ public final class WafPolicies {
      */
     public static final class Builder {
         private WafMode mode = WafMode.BLOCK;
+        private MemoryAllocator allocator;
         private final List<WafRule> customRules = new ArrayList<>(CoreWafRuleSet.defaultRules());
 
         /**
@@ -59,6 +76,18 @@ public final class WafPolicies {
          */
         public Builder mode(WafMode mode) {
             this.mode = (mode != null) ? mode : WafMode.BLOCK;
+            return this;
+        }
+
+        /**
+         * Sets where an evaluation borrows the room it decodes percent-encoding into.
+         *
+         * @param allocator the allocator; {@code null} reads {@code KernelProviders.MEMORY_ALLOCATOR} when it is
+         *                  bound at the evaluation, which the kernel does around every request handler
+         * @return this builder
+         */
+        public Builder allocator(MemoryAllocator allocator) {
+            this.allocator = allocator;
             return this;
         }
 
@@ -81,7 +110,7 @@ public final class WafPolicies {
          * @return the policy
          */
         public WafPolicy build() {
-            return new DefaultWafPolicy(mode, customRules);
+            return new DefaultWafPolicy(mode, customRules, allocator);
         }
     }
 }

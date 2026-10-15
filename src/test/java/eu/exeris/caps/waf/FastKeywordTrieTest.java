@@ -6,6 +6,8 @@ import eu.exeris.caps.waf.internal.FastKeywordTrie;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -92,5 +94,25 @@ class FastKeywordTrieTest {
         char[] text = "xx<B>yy".toCharArray();
         assertThat(trie.findFirstMatchIndex(text, text.length)).isZero();
         assertThat(trie.findFirstMatchIndex(text, 4)).isEqualTo(-1);
+    }
+
+    @Test
+    @DisplayName("Scanning a memory segment selects the rule the string and char[] scans select")
+    void testSegmentScanAgreesWithOtherForms() {
+        FastKeywordTrie trie = FastKeywordTrie.compile(List.of(
+                new WafRule("SQLI-1", "Union", WafCategory.SQL_INJECTION, "union select", "desc"),
+                new WafRule("XSS-1", "Script", WafCategory.XSS, "<script", "desc"),
+                new WafRule("WIDE-1", "Wide", WafCategory.XSS, "\u00e9t\u00e9", "desc")
+        ));
+        for (String text : List.of("", "clean", "a UNION SELECT b", "x<ScRiPt>", "l\u00c9t\u00e9", "\u00e9t\u00e9 union select")) {
+            // A byte[]-backed segment is not 2-aligned, as the buffer of an allocator on the heap tier may not be
+            MemorySegment segment = MemorySegment.ofArray(new byte[text.length() * 2 + 2]);
+            for (int i = 0; i < text.length(); i++) {
+                segment.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i, text.charAt(i));
+            }
+            int expected = trie.findFirstMatchIndex(text, text.length());
+            assertThat(trie.findFirstMatchIndex(segment, text.length())).as(text).isEqualTo(expected);
+            assertThat(trie.findFirstMatchIndex(text.toCharArray(), text.length())).as(text).isEqualTo(expected);
+        }
     }
 }

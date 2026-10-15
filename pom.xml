@@ -10,7 +10,7 @@
 
     <name>Exeris Caps :: WAF Rules Engine</name>
     <description>
-        High-performance, zero-allocation Web Application Firewall capability for Exeris Gateway.
+        High-performance Web Application Firewall capability for Exeris Gateway.
         Provides sub-microsecond L7 threat inspection (SQLi, XSS, Path Traversal, RCE, Protocol)
         with two-stage Aho-Corasick pre-filtering and wire-speed edge mitigation.
     </description>

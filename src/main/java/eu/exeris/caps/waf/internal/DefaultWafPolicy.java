@@ -8,6 +8,12 @@ import eu.exeris.caps.waf.api.WafPolicy;
 import eu.exeris.caps.waf.api.WafRequest;
 import eu.exeris.caps.waf.api.WafRule;
 
+import eu.exeris.kernel.spi.context.KernelProviders;
+import eu.exeris.kernel.spi.memory.LoanedBuffer;
+import eu.exeris.kernel.spi.memory.MemoryAllocator;
+
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.List;
 
 /**
@@ -17,12 +23,19 @@ import java.util.List;
  * and every header value, each in the form received and after each round of percent-decoding
  * ({@code +} reads as a space). A value still changing after the permitted rounds is refused.
  *
- * <p>Allocation: evaluating a request allocates nothing in steady state, whether it is clean, matches a rule
- * or violates the protocol checks. Decoding runs over a thread-confined {@code char[]} reused across calls,
- * the keyword scan reads primitive arrays, and every decision a request can receive is built when the policy is
- * constructed (the shared {@link WafDecision#allow()} for a clean request). What allocates is the one-time
- * growth of the calling thread's scratch buffer to the longest percent-encoded value it has evaluated, and its
- * first call. {@code WafAllocationTest} measures plain clean, percent-encoded clean and matching requests.
+ * <p>Allocation: a request none of whose values contains {@code %} or {@code +} allocates nothing, whether it is
+ * clean or matches a rule or violates the protocol checks: the keyword scan reads primitive arrays and every
+ * decision a request can receive is built when the policy is constructed (the shared {@link WafDecision#allow()}
+ * for a clean request). A request that has such a value needs room to decode into, and borrows it once, for the
+ * longest of those values, as a {@link LoanedBuffer} from a {@link MemoryAllocator}, in try-with-resources and
+ * returned when the evaluation ends; nothing is kept between calls and no thread holds state, so the cost does not
+ * depend on which thread evaluates or how long it lives. The borrow costs what the allocator charges for one: the
+ * kernel's pooled buffers reuse their memory, and the objects that wrap it are the allocator's, not this class's.
+ * The allocator is the one given at construction, else {@link KernelProviders#MEMORY_ALLOCATOR} when it is bound
+ * where {@link #evaluate} runs, which the kernel does around every request handler. With neither, an evaluation
+ * that needs room decodes into a new {@code char[]} of the size it needs. {@code WafAllocationTest} measures the
+ * requests that need no borrow, and the borrowing ones against a recycling allocator, each on a new virtual thread
+ * per evaluation.
  *
  * @since 0.1.0
  */
@@ -30,11 +43,11 @@ public final class DefaultWafPolicy implements WafPolicy {
 
     private static final int MAX_URI_LENGTH = 4096;
     private static final int MAX_DECODE_ROUNDS = 3;
-    private static final int INITIAL_SCRATCH = 512;
-
-    private static final ThreadLocal<char[][]> SCRATCH = ThreadLocal.withInitial(() -> new char[][] {new char[INITIAL_SCRATCH]});
+    private static final int BYTES_PER_CHAR = Character.BYTES;
 
     private final WafMode mode;
+    /** Where decode room is borrowed from; {@code null} reads {@link KernelProviders#MEMORY_ALLOCATOR} on use. */
+    private final MemoryAllocator allocator;
     private final FastKeywordTrie automaton;
 
     /** Decision per rule index for a match in the path, query or URI. */
@@ -47,7 +60,26 @@ public final class DefaultWafPolicy implements WafPolicy {
     private final WafDecision originalUrlHeader;
     private final WafDecision rewriteUrlHeader;
 
+    /**
+     * Creates a policy that borrows decode room from the allocator the kernel binds around a request handler.
+     *
+     * @param mode  the enforcement mode; {@code null} selects {@link WafMode#BLOCK}
+     * @param rules the rules; {@code null} selects the built-in set
+     */
     public DefaultWafPolicy(WafMode mode, List<WafRule> rules) {
+        this(mode, rules, null);
+    }
+
+    /**
+     * Creates a policy that borrows decode room from {@code allocator}.
+     *
+     * @param mode      the enforcement mode; {@code null} selects {@link WafMode#BLOCK}
+     * @param rules     the rules; {@code null} selects the built-in set
+     * @param allocator where an evaluation borrows decode room; {@code null} reads
+     *                  {@link KernelProviders#MEMORY_ALLOCATOR} when it is bound at the evaluation
+     */
+    public DefaultWafPolicy(WafMode mode, List<WafRule> rules, MemoryAllocator allocator) {
+        this.allocator = allocator;
         this.mode = (mode != null) ? mode : WafMode.BLOCK;
         this.automaton = FastKeywordTrie.compile(rules != null ? rules : CoreWafRuleSet.defaultRules());
 
@@ -85,18 +117,62 @@ public final class DefaultWafPolicy implements WafPolicy {
             return uriTooLong;
         }
 
-        // 2. Scan Path, Query String and URI, each in every decoded form
-        char[][] scratch = SCRATCH.get();
-        WafDecision verdict = inspect(request.rawPath(), matchDecisions, scratch);
+        // 2. Room to decode into, borrowed for this evaluation only and only when a value can need it
+        int decodeChars = longestEncoded(request, uri);
+        if (decodeChars == 0) {
+            return scan(request, uri, null);
+        }
+        MemoryAllocator source = allocator != null ? allocator : boundAllocator();
+        if (source == null) {
+            return scan(request, uri, MemorySegment.ofArray(new char[decodeChars]));
+        }
+        try (LoanedBuffer room = source.allocateNetwork(Math.multiplyExact(decodeChars, BYTES_PER_CHAR))) {
+            return scan(request, uri, room.segment());
+        }
+    }
+
+    private static MemoryAllocator boundAllocator() {
+        return KernelProviders.MEMORY_ALLOCATOR.isBound() ? KernelProviders.MEMORY_ALLOCATOR.get() : null;
+    }
+
+    /** The length of the longest value {@link #scan} may decode, or 0 when it decodes none. */
+    private static int longestEncoded(WafRequest request, String uri) {
+        int longest = encodedLength(request.rawPath(), 0);
+        longest = encodedLength(request.rawQuery(), longest);
+        if (uri != null && !uri.equals(request.rawPath())) {
+            longest = encodedLength(uri, longest);
+        }
+        List<WafHeader> headers = request.headers();
+        for (int i = 0, n = headers.size(); i < n; i++) {
+            longest = encodedLength(headers.get(i).value(), longest);
+        }
+        return longest;
+    }
+
+    private static int encodedLength(String value, int longest) {
+        if (value == null || value.length() <= longest || (value.indexOf('%') < 0 && value.indexOf('+') < 0)) {
+            return longest;
+        }
+        return value.length();
+    }
+
+    /**
+     * Scans the path, query, URI and headers of a request.
+     *
+     * @param room where values are decoded; may be {@code null} only when no value contains {@code %} or
+     *             {@code +}, and otherwise holds at least the length of the longest such value
+     */
+    private WafDecision scan(WafRequest request, String uri, MemorySegment room) {
+        WafDecision verdict = inspect(request.rawPath(), matchDecisions, room);
         if (verdict != null) {
             return verdict;
         }
-        verdict = inspect(request.rawQuery(), matchDecisions, scratch);
+        verdict = inspect(request.rawQuery(), matchDecisions, room);
         if (verdict != null) {
             return verdict;
         }
         if (uri != null && !uri.equals(request.rawPath())) {
-            verdict = inspect(uri, matchDecisions, scratch);
+            verdict = inspect(uri, matchDecisions, room);
             if (verdict != null) {
                 return verdict;
             }
@@ -116,7 +192,7 @@ public final class DefaultWafPolicy implements WafPolicy {
                 return rewriteUrlHeader;
             }
 
-            verdict = inspect(header.value(), headerMatchDecisions, scratch);
+            verdict = inspect(header.value(), headerMatchDecisions, room);
             if (verdict != null) {
                 return verdict;
             }
@@ -130,12 +206,12 @@ public final class DefaultWafPolicy implements WafPolicy {
      * than once is matched as the decoded form a backend would eventually act on. A value that is still
      * changing after {@link #MAX_DECODE_ROUNDS} rounds is refused.
      *
-     * <p>The first decoding round reads the string and writes the thread's scratch buffer; later rounds
-     * decode that buffer in place, which is possible because decoding never lengthens a value.
+     * <p>The first decoding round reads the string and writes {@code room}; later rounds decode that room in
+     * place, which is possible because decoding never lengthens a value.
      *
      * @return the decision for a match or violation, or {@code null} when the value is clean
      */
-    private WafDecision inspect(String value, WafDecision[] matchTable, char[][] scratch) {
+    private WafDecision inspect(String value, WafDecision[] matchTable, MemorySegment room) {
         if (value == null || value.isEmpty()) {
             return null;
         }
@@ -150,12 +226,7 @@ public final class DefaultWafPolicy implements WafPolicy {
             return null;
         }
 
-        char[] buf = scratch[0];
-        if (buf.length < value.length()) {
-            buf = new char[Math.max(value.length(), buf.length * 2)];
-            scratch[0] = buf;
-        }
-        int len = decodeInto(value, buf);
+        int len = decodeInto(value, room);
         for (int round = 1; ; round++) {
             if (len < 0) {
                 return null;
@@ -163,20 +234,20 @@ public final class DefaultWafPolicy implements WafPolicy {
             if (round > MAX_DECODE_ROUNDS) {
                 return excessiveEncoding;
             }
-            if (indexOfNul(buf, len)) {
+            if (indexOfNul(room, len)) {
                 return nullByte;
             }
-            rule = automaton.findFirstMatchIndex(buf, len);
+            rule = automaton.findFirstMatchIndex(room, len);
             if (rule >= 0) {
                 return matchTable[rule];
             }
-            len = decodeInPlace(buf, len);
+            len = decodeInPlace(room, len);
         }
     }
 
-    private static boolean indexOfNul(char[] buf, int len) {
+    private static boolean indexOfNul(MemorySegment buf, int len) {
         for (int i = 0; i < len; i++) {
-            if (buf[i] == '\0') {
+            if (buf.getAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i) == '\0') {
                 return true;
             }
         }
@@ -184,11 +255,11 @@ public final class DefaultWafPolicy implements WafPolicy {
     }
 
     /**
-     * Percent-decodes {@code src} into {@code dst}.
+     * Percent-decodes {@code src} into {@code dst}, one UTF-16 code unit per char index.
      *
      * @return the decoded length, or -1 when nothing was decoded
      */
-    private static int decodeInto(String src, char[] dst) {
+    private static int decodeInto(String src, MemorySegment dst) {
         int len = src.length();
         int o = 0;
         boolean changed = false;
@@ -198,17 +269,17 @@ public final class DefaultWafPolicy implements WafPolicy {
                 int d1 = hexDigit(src.charAt(i + 1));
                 int d2 = hexDigit(src.charAt(i + 2));
                 if (d1 >= 0 && d2 >= 0) {
-                    dst[o++] = (char) ((d1 << 4) | d2);
+                    dst.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, (char) ((d1 << 4) | d2));
                     i += 2;
                     changed = true;
                     continue;
                 }
             } else if (c == '+') {
-                dst[o++] = ' ';
+                dst.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, ' ');
                 changed = true;
                 continue;
             }
-            dst[o++] = c;
+            dst.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, c);
         }
         return changed ? o : -1;
     }
@@ -218,26 +289,26 @@ public final class DefaultWafPolicy implements WafPolicy {
      *
      * @return the decoded length, or -1 when nothing was decoded
      */
-    private static int decodeInPlace(char[] buf, int len) {
+    private static int decodeInPlace(MemorySegment buf, int len) {
         int o = 0;
         boolean changed = false;
         for (int i = 0; i < len; i++) {
-            char c = buf[i];
+            char c = buf.getAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i);
             if (c == '%' && i + 2 < len) {
-                int d1 = hexDigit(buf[i + 1]);
-                int d2 = hexDigit(buf[i + 2]);
+                int d1 = hexDigit(buf.getAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i + 1));
+                int d2 = hexDigit(buf.getAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, i + 2));
                 if (d1 >= 0 && d2 >= 0) {
-                    buf[o++] = (char) ((d1 << 4) | d2);
+                    buf.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, (char) ((d1 << 4) | d2));
                     i += 2;
                     changed = true;
                     continue;
                 }
             } else if (c == '+') {
-                buf[o++] = ' ';
+                buf.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, ' ');
                 changed = true;
                 continue;
             }
-            buf[o++] = c;
+            buf.setAtIndex(ValueLayout.JAVA_CHAR_UNALIGNED, o++, c);
         }
         return changed ? o : -1;
     }
