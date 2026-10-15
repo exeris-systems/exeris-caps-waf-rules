@@ -4,92 +4,161 @@ import eu.exeris.caps.waf.api.WafRule;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Queue;
+import java.util.TreeSet;
 
 /**
  * Immutable, thread-safe Aho-Corasick multi-keyword search automaton.
  *
- * <p>Constructed once at startup. Evaluates text in a single pass $O(L)$ with zero heap
- * allocations on the search path, providing sub-microsecond pre-filtering.
+ * <p>Built once, then read-only. The automaton is compiled to a complete transition table over the
+ * characters the keywords use (every other character leads back to the start), held in primitive
+ * arrays, so a scan reads those arrays and allocates nothing: no boxing, no iterator, no result
+ * object other than the {@link WafRule} or rule index it returns. Matching is case-insensitive for
+ * the characters A to Z only.
+ *
+ * <p>The scan is a single pass over the input, linear in its length.
  *
  * @since 0.1.0
  */
 public final class FastKeywordTrie {
 
-    private final TrieNode root;
+    private static final int ASCII = 128;
 
-    private FastKeywordTrie(TrieNode root) {
-        this.root = root;
+    /** Character to alphabet class for characters below {@link #ASCII}; 0 means "not a keyword character". */
+    private final int[] asciiClass;
+    /** Sorted keyword characters at or above {@link #ASCII}; the class of {@code wide[i]} is {@code wideClass[i]}. */
+    private final char[] wide;
+    private final int[] wideClass;
+    private final int classes;
+    /** {@code next[state * classes + class]}: the complete transition function. */
+    private final int[] next;
+    /** Index into {@link #rules} of the first rule matched on entering a state, or -1. */
+    private final int[] out;
+    private final WafRule[] rules;
+
+    private FastKeywordTrie(int[] asciiClass, char[] wide, int[] wideClass, int classes,
+                            int[] next, int[] out, WafRule[] rules) {
+        this.asciiClass = asciiClass;
+        this.wide = wide;
+        this.wideClass = wideClass;
+        this.classes = classes;
+        this.next = next;
+        this.out = out;
+        this.rules = rules;
     }
 
     /**
-     * Builds an automaton from the specified collection of WAF rules.
+     * Builds an automaton from the specified collection of WAF rules. Rules without a keyword are skipped.
      *
      * @param rules the rules containing keywords to match
      * @return the compiled, immutable automaton
      */
     public static FastKeywordTrie compile(List<WafRule> rules) {
-        TrieNode root = new TrieNode('\0');
-
-        // 1. Build basic keyword trie
+        List<WafRule> kept = new ArrayList<>();
+        List<String> keywords = new ArrayList<>();
+        TreeSet<Character> alphabet = new TreeSet<>();
         for (WafRule rule : rules) {
             String kw = rule.patternOrKeyword();
             if (kw == null || kw.isEmpty()) {
                 continue;
             }
-            String lowerKw = asciiLowerCase(kw);
-            TrieNode current = root;
-            for (int i = 0; i < lowerKw.length(); i++) {
-                char c = lowerKw.charAt(i);
-                current = current.children.computeIfAbsent(c, TrieNode::new);
+            String lower = asciiLowerCase(kw);
+            kept.add(rule);
+            keywords.add(lower);
+            for (int i = 0; i < lower.length(); i++) {
+                alphabet.add(lower.charAt(i));
             }
-            if (current.matches == null) {
-                current.matches = new ArrayList<>(1);
-            }
-            current.matches.add(rule);
         }
 
-        // 2. Compute failure and dictionary links using BFS
-        Queue<TrieNode> queue = new ArrayDeque<>();
-        for (TrieNode child : root.children.values()) {
-            child.failure = root;
-            queue.add(child);
+        int[] asciiClass = new int[ASCII];
+        List<Character> wideChars = new ArrayList<>();
+        int classes = 1;
+        for (char c : alphabet) {
+            if (c < ASCII) {
+                asciiClass[c] = classes++;
+            } else {
+                wideChars.add(c);
+            }
+        }
+        char[] wide = new char[wideChars.size()];
+        int[] wideClass = new int[wide.length];
+        for (int i = 0; i < wide.length; i++) {
+            wide[i] = wideChars.get(i);
+            wideClass[i] = classes++;
         }
 
-        while (!queue.isEmpty()) {
-            TrieNode current = queue.poll();
-            for (Map.Entry<Character, TrieNode> entry : current.children.entrySet()) {
-                char c = entry.getKey();
-                TrieNode child = entry.getValue();
-
-                TrieNode fail = current.failure;
-                while (fail != null && !fail.children.containsKey(c)) {
-                    fail = fail.failure;
-                }
-                child.failure = (fail != null) ? fail.children.get(c) : root;
-
-                // Inherit matches from failure node
-                if (child.failure != null && child.failure.matches != null && !child.failure.matches.isEmpty()) {
-                    if (child.matches == null) {
-                        child.matches = new ArrayList<>(child.failure.matches.size());
+        // Build the keyword trie in growable arrays.
+        int[][] children = new int[16][];
+        int[] first = new int[16];
+        int states = 1;
+        children[0] = new int[classes];
+        Arrays.fill(first, -1);
+        for (int k = 0; k < keywords.size(); k++) {
+            String kw = keywords.get(k);
+            int state = 0;
+            for (int i = 0; i < kw.length(); i++) {
+                int cls = classOf(asciiClass, wide, wideClass, kw.charAt(i));
+                if (children[state][cls] == 0) {
+                    if (states == children.length) {
+                        children = Arrays.copyOf(children, states * 2);
+                        int old = first.length;
+                        first = Arrays.copyOf(first, states * 2);
+                        Arrays.fill(first, old, first.length, -1);
                     }
-                    child.matches.addAll(child.failure.matches);
+                    children[states] = new int[classes];
+                    children[state][cls] = states++;
                 }
+                state = children[state][cls];
+            }
+            if (first[state] < 0) {
+                first[state] = k;
+            }
+        }
 
+        // Breadth-first: complete the transition function and inherit matches along failure links.
+        int[] failure = new int[states];
+        int[] next = new int[states * classes];
+        int[] out = Arrays.copyOf(first, states);
+        Queue<Integer> queue = new ArrayDeque<>();
+        for (int cls = 1; cls < classes; cls++) {
+            int child = children[0][cls];
+            next[cls] = child;
+            if (child != 0) {
+                failure[child] = 0;
                 queue.add(child);
             }
         }
-
-        // 3. Flatten child transitions into compact immutable lookups
-        root.freeze();
-        return new FastKeywordTrie(root);
+        while (!queue.isEmpty()) {
+            int state = queue.poll();
+            if (out[state] < 0) {
+                out[state] = out[failure[state]];
+            }
+            for (int cls = 0; cls < classes; cls++) {
+                int child = children[state][cls];
+                int viaFailure = next[failure[state] * classes + cls];
+                if (child != 0) {
+                    failure[child] = viaFailure;
+                    next[state * classes + cls] = child;
+                    queue.add(child);
+                } else {
+                    next[state * classes + cls] = viaFailure;
+                }
+            }
+        }
+        return new FastKeywordTrie(asciiClass, wide, wideClass, classes, next, out, kept.toArray(new WafRule[0]));
     }
 
-    /** Folds only A-Z, the same fold {@link #findFirstMatch} applies to the input. */
+    private static int classOf(int[] asciiClass, char[] wide, int[] wideClass, char c) {
+        if (c < ASCII) {
+            return asciiClass[c];
+        }
+        int idx = Arrays.binarySearch(wide, c);
+        return idx >= 0 ? wideClass[idx] : 0;
+    }
+
+    /** Folds only A-Z, the same fold the scan applies to its input. */
     private static String asciiLowerCase(String text) {
         char[] chars = text.toCharArray();
         for (int i = 0; i < chars.length; i++) {
@@ -100,65 +169,67 @@ public final class FastKeywordTrie {
         return new String(chars);
     }
 
-    /**
-     * Scans the input text in a single pass without allocating objects on the heap.
-     *
-     * @param text input sequence (e.g. URI, query string, header value)
-     * @return the first matched {@link WafRule}, or {@code null} if no threats are found
-     */
-    public WafRule findFirstMatch(CharSequence text) {
-        if (text == null || text.length() == 0) {
-            return null;
-        }
-
-        TrieNode current = root;
-        final int len = text.length();
-
-        for (int i = 0; i < len; i++) {
-            char c = text.charAt(i);
-            // Fast ASCII lowercase conversion without String allocation
-            if (c >= 'A' && c <= 'Z') {
-                c = (char) (c + 32);
-            }
-
-            TrieNode next = current.getChild(c);
-            while (next == null && current != root) {
-                current = current.failure;
-                next = current.getChild(c);
-            }
-
-            current = (next != null) ? next : root;
-
-            if (current.matches != null && !current.matches.isEmpty()) {
-                return current.matches.get(0);
-            }
-        }
-
-        return null;
+    /** @return the rules this automaton can report, in the order {@link #findFirstMatchIndex} indexes them */
+    public List<WafRule> rules() {
+        return List.of(rules);
     }
 
     /**
-     * Internal node representation.
+     * Scans the input text in a single pass.
+     *
+     * @param text input sequence (e.g. URI, query string, header value)
+     * @return the first matched {@link WafRule}, or {@code null} if none matches
      */
-    private static final class TrieNode {
-        final char character;
-        Map<Character, TrieNode> children = new HashMap<>(4);
-        TrieNode failure;
-        List<WafRule> matches;
-
-        TrieNode(char character) {
-            this.character = character;
+    public WafRule findFirstMatch(CharSequence text) {
+        if (text == null) {
+            return null;
         }
+        int rule = findFirstMatchIndex(text, text.length());
+        return rule < 0 ? null : rules[rule];
+    }
 
-        TrieNode getChild(char c) {
-            return children.get(c);
-        }
-
-        void freeze() {
-            children = Collections.unmodifiableMap(children);
-            for (TrieNode child : children.values()) {
-                child.freeze();
+    /**
+     * Scans the first {@code length} characters of {@code text} in a single pass. Allocation-free.
+     *
+     * @return the index, in {@link #rules()}, of the first rule matched, or -1
+     */
+    public int findFirstMatchIndex(CharSequence text, int length) {
+        int state = 0;
+        for (int i = 0; i < length; i++) {
+            state = next[state * classes + classOf(text.charAt(i))];
+            int rule = out[state];
+            if (rule >= 0) {
+                return rule;
             }
         }
+        return -1;
+    }
+
+    /**
+     * Scans the first {@code length} characters of {@code text} in a single pass. Allocation-free.
+     *
+     * @return the index, in {@link #rules()}, of the first rule matched, or -1
+     */
+    public int findFirstMatchIndex(char[] text, int length) {
+        int state = 0;
+        for (int i = 0; i < length; i++) {
+            state = next[state * classes + classOf(text[i])];
+            int rule = out[state];
+            if (rule >= 0) {
+                return rule;
+            }
+        }
+        return -1;
+    }
+
+    private int classOf(char c) {
+        if (c < ASCII) {
+            if (c >= 'A' && c <= 'Z') {
+                c = (char) (c + 32);
+            }
+            return asciiClass[c];
+        }
+        int idx = Arrays.binarySearch(wide, c);
+        return idx >= 0 ? wideClass[idx] : 0;
     }
 }

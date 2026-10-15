@@ -207,13 +207,53 @@ class WafPolicyTest {
     }
 
     @Test
-    @DisplayName("A header name is reduced to token characters in a decision description")
-    void headerNameInDescriptionIsSanitised() {
+    @DisplayName("A header match reports the rule and no request text in its description")
+    void headerMatchDescriptionCarriesNoRequestText() {
         WafRequest req = new WafRequest("GET", "/x", "/x", "",
                 List.of(new WafHeader("X-A<script>\r\n", "1 union select 1")));
         WafDecision decision = policy.evaluate(req);
         assertThat(decision.isAllowed()).isFalse();
-        assertThat(decision.description()).doesNotContain("<", ">", "\r", "\n");
+        assertThat(decision.ruleId()).isEqualTo("SQLI-101");
+        assertThat(decision.description()).doesNotContain("<", ">", "\r", "\n", "X-A");
+    }
+
+    @Test
+    @DisplayName("DISABLED mode allows every request without inspecting it")
+    void disabledModeAllowsEverything() {
+        WafPolicy disabled = WafPolicies.defaultCoreRules(WafMode.DISABLED);
+        WafDecision matched = disabled.evaluate(query("id=1 union select 1"));
+        assertThat(matched.isAllowed()).isTrue();
+        assertThat(matched.ruleId()).isNull();
+        assertThat(matched.isDetected()).isFalse();
+
+        WafRequest header = new WafRequest("GET", "/x", "/x", "", List.of(new WafHeader("X-Original-URL", "/admin")));
+        assertThat(disabled.evaluate(header)).isSameAs(WafDecision.allow());
+        assertThat(disabled.evaluate(query("f=a%00b"))).isSameAs(WafDecision.allow());
+    }
+
+    @Test
+    @DisplayName("A value that decodes to the same keyword on every thread is matched on every thread")
+    void scratchIsPerThread() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            java.util.List<java.util.concurrent.Future<Boolean>> results = new java.util.ArrayList<>();
+            for (int t = 0; t < 8; t++) {
+                results.add(pool.submit(() -> {
+                    for (int i = 0; i < 2_000; i++) {
+                        if (policy.evaluate(query("q=1%2520union%2520select%25201")).isAllowed()
+                                || !policy.evaluate(query("q=a+b%20c")).isAllowed()) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }));
+            }
+            for (java.util.concurrent.Future<Boolean> f : results) {
+                assertThat(f.get()).isTrue();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

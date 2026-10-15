@@ -65,4 +65,32 @@ class FastKeywordTrieTest {
         assertThat(trie.findFirstMatch("x\u00c4bcx")).isNotNull();
         assertThat(trie.findFirstMatch("xabcx")).isNull();
     }
+
+    @Test
+    @DisplayName("Reports a keyword that ends inside a longer one, and one reached through a failure link")
+    void failureLinksAndEmbeddedKeywords() {
+        FastKeywordTrie trie = FastKeywordTrie.compile(List.of(
+                new WafRule("R-HERS", "hers", WafCategory.XSS, "hers", "d"),
+                new WafRule("R-SHE", "she", WafCategory.XSS, "she", "d"),
+                new WafRule("R-HE", "he", WafCategory.XSS, "he", "d")));
+
+        assertThat(trie.findFirstMatch("ushers").id()).isEqualTo("R-SHE");
+        assertThat(trie.findFirstMatch("xxhe").id()).isEqualTo("R-HE");
+        assertThat(trie.findFirstMatch("hhhh")).isNull();
+        assertThat(trie.findFirstMatch("sh")).isNull();
+        assertThat(trie.rules()).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("Skips a rule without a keyword and scans a char array and a prefix of it")
+    void emptyKeywordAndCharArrayScan() {
+        FastKeywordTrie trie = FastKeywordTrie.compile(List.of(
+                new WafRule("R-EMPTY", "e", WafCategory.XSS, "", "d"),
+                new WafRule("R-ONE", "one", WafCategory.XSS, "<b>", "d")));
+
+        assertThat(trie.rules()).hasSize(1);
+        char[] text = "xx<B>yy".toCharArray();
+        assertThat(trie.findFirstMatchIndex(text, text.length)).isZero();
+        assertThat(trie.findFirstMatchIndex(text, 4)).isEqualTo(-1);
+    }
 }
