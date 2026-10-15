@@ -29,7 +29,9 @@ traversal, command execution, protocol violation, header abuse) matched by an Ah
 framing and URL-override headers. Percent-encoding is decoded in repeated rounds before matching, and a
 value still encoded after three rounds is refused. Detect mode reports the matched rule
 (`WafDecision.detect`). One compile dependency, `exeris-kernel-spi`, used only for the `WafEntitlement` requirement; no
-`@Requires`. 30 tests across four classes.
+`@Requires`. Evaluating a request, clean or matching, allocates nothing in steady state: decoding runs over a
+thread-confined scratch buffer, the automaton is a set of primitive arrays, and every decision is built when the
+policy is constructed; `WafAllocationTest` measures it.
 
 **This roadmap does not promise a ruleset.** Rule-language items below are capabilities to add; their
 size is decided as they are taken up.

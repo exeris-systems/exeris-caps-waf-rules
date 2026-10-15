@@ -6,10 +6,10 @@ package eu.exeris.caps.waf.api;
  * @since 0.1.0
  */
 public enum WafMode {
-    /** Actively rejects malicious requests with HTTP 403 Forbidden. */
+    /** A matching request yields a decision with {@code isAllowed() == false}; what the caller does with it is the caller's. */
     BLOCK,
-    /** Inspects and flags requests without dropping or short-circuiting. */
+    /** A matching request yields a decision with {@code isAllowed() == true} that reports the first rule matched. */
     DETECT,
-    /** Bypasses inspection completely. */
+    /** No inspection: every request yields {@link WafDecision#allow()}. */
     DISABLED
 }

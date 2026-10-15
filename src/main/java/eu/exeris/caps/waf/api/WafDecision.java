@@ -14,6 +14,9 @@ public record WafDecision(
 ) {
     private static final WafDecision ALLOWED = new WafDecision(true, null, null, null, null);
 
+    /**
+     * @return the shared decision for a request that matched no rule; its {@code ruleId} is {@code null}
+     */
     public static WafDecision allow() {
         return ALLOWED;
     }
@@ -32,6 +35,9 @@ public record WafDecision(
         return isAllowed && ruleId != null;
     }
 
+    /**
+     * A decision that refuses the request and reports the rule it matched, as {@link WafMode#BLOCK} does.
+     */
     public static WafDecision block(WafCategory category, String ruleId, String matchedToken, String description) {
         return new WafDecision(false, category, ruleId, matchedToken, description);
     }

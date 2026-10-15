@@ -8,7 +8,11 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Standard OWASP-aligned Core Rule Set (CRS) for Layer 7 gateway protection.
+ * The built-in rule set: a small list of case-insensitive substring keywords covering SQL injection,
+ * cross-site scripting, path traversal and command execution.
+ *
+ * <p>It does not match regular expressions, and it sees encodings only as far as percent-decoding and
+ * {@code +} for space; other encodings and obfuscations are not recognised.
  *
  * @since 0.1.0
  */

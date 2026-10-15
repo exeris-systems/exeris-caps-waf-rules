@@ -15,7 +15,8 @@ public interface WafPolicy {
      * Inspects the given HTTP request for security policy violations.
      *
      * @param request the request metadata; never null
-     * @return the policy decision (allow or block with reason); never null
+     * @return the policy decision: allowed, blocked with the rule that matched, or allowed with the rule
+     *         that matched when the policy only detects; never null
      */
     WafDecision evaluate(WafRequest request);
 }
