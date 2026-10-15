@@ -6,6 +6,8 @@ import eu.exeris.caps.waf.api.WafMode;
 import eu.exeris.caps.waf.api.WafPolicies;
 import eu.exeris.caps.waf.api.WafPolicy;
 import eu.exeris.caps.waf.api.WafRequest;
+import eu.exeris.caps.waf.internal.CoreWafRuleSet;
+import eu.exeris.caps.waf.internal.DefaultWafPolicy;
 import eu.exeris.kernel.community.memory.CommunityMemoryProvider;
 import eu.exeris.kernel.spi.memory.MemoryAllocator;
 import eu.exeris.kernel.spi.memory.MemoryProviderConfig;
@@ -76,6 +78,10 @@ class WafAllocationTest {
 
     private static final WafRequest[][] ENCODED = {ENCODED_CLEAN, ENCODED_REFUSED};
 
+    private static WafPolicy policy(MemoryAllocator allocator) {
+        return new DefaultWafPolicy(WafMode.BLOCK, CoreWafRuleSet.defaultRules(), allocator);
+    }
+
     private static Config config(Contract contract) {
         return new Config("WafRules", "WafAllocationTest", WARMUP, MEASURED, contract);
     }
@@ -111,7 +117,7 @@ class WafAllocationTest {
     void encodedRequestsAddNothingToTheBorrow() throws Exception {
         for (WafRequest[] requests : ENCODED) {
             RecyclingAllocator allocator = new RecyclingAllocator(4, 64 * 1_024);
-            WafPolicy policy = WafPolicies.defaultCoreRules(WafMode.BLOCK, allocator);
+            WafPolicy policy = policy(allocator);
             long allowed = run(config(Contract.zero()), policy, requests);
             assertThat(allowed > 0).isEqualTo(requests == ENCODED_CLEAN);
             assertThat(allocator.borrows()).as("one borrow per evaluation").isEqualTo(WARMUP + MEASURED);
@@ -123,7 +129,7 @@ class WafAllocationTest {
     @DisplayName("Percent-encoded requests borrow from the kernel's Community allocator within a byte budget")
     void encodedRequestsAgainstTheCommunityAllocator() throws Exception {
         try (MemoryAllocator community = new CommunityMemoryProvider().createAllocator(MemoryProviderConfig.defaults())) {
-            WafPolicy policy = WafPolicies.defaultCoreRules(WafMode.BLOCK, community);
+            WafPolicy policy = policy(community);
             for (WafRequest[] requests : ENCODED) {
                 run(config(Contract.bytesPerIteration(BORROW_BYTES_BUDGET)), policy, requests);
             }
@@ -133,8 +139,7 @@ class WafAllocationTest {
 
     /**
      * What one borrow from the Community allocator may allocate, in bytes: the buffer object that wraps the pooled
-     * segment, the record that carries the segment back, and the queue node that takes it back, which measure
-     * about 120 bytes together.
+     * segment, the record that carries the segment back, and the queue node that takes it back.
      */
     private static final double BORROW_BYTES_BUDGET = 160;
 
@@ -198,15 +203,15 @@ class WafAllocationTest {
         MemoryAllocator community = new CommunityMemoryProvider().createAllocator(MemoryProviderConfig.defaults());
         RecyclingAllocator recycling = new RecyclingAllocator(1, 64 * 1_024);
         WafPolicy none = WafPolicies.defaultCoreRules();
-        WafPolicy explicit = WafPolicies.defaultCoreRules(WafMode.BLOCK, recycling);
-        WafPolicy builder = WafPolicies.builder().allocator(community).build();
+        WafPolicy explicit = policy(recycling);
+        WafPolicy pooled = policy(community);
         WafPolicy bound = WafPolicies.defaultCoreRules();
         try (community) {
             for (WafRequest[] requests : new WafRequest[][] {PLAIN_CLEAN, PLAIN_REFUSED, ENCODED_CLEAN, ENCODED_REFUSED}) {
                 for (WafRequest request : requests) {
                     WafDecision expected = none.evaluate(request);
                     assertThat(explicit.evaluate(request)).isEqualTo(expected);
-                    assertThat(builder.evaluate(request)).isEqualTo(expected);
+                    assertThat(pooled.evaluate(request)).isEqualTo(expected);
                     assertThat(boundEvaluate(recycling, bound, request)).isEqualTo(expected);
                 }
             }

@@ -27,11 +27,11 @@ Layer 3 gateway policy cap. Provides `WafPolicy.evaluate(WafRequest) → WafDeci
 traversal, command execution, protocol violation, header abuse) matched by an Aho-Corasick-style automaton
 (`FastKeywordTrie`) over path, query and header values, with a URI-length limit and checks on request
 framing and URL-override headers. Percent-encoding is decoded in repeated rounds before matching, and a
-value still encoded after three rounds is refused. Detect mode reports the matched rule
+value still encoded after three rounds yields a block, or in detect mode a detection. Detect mode reports the matched rule
 (`WafDecision.detect`). One compile dependency, `exeris-kernel-spi`, used for the `WafEntitlement` requirement and for the allocator that lends decode room; no
 `@Requires`. Evaluating a request none of whose values contains `%` or `+` allocates nothing, clean or matching; the automaton is a set of
 primitive arrays and every decision is built when the policy is constructed. A request that has such a value borrows its decode room
-once as a `LoanedBuffer` from the allocator given to the policy or bound by the kernel around the request handler, and returns it when
+once as a `LoanedBuffer` from the allocator the kernel binds around the request handler, and returns it when
 the evaluation ends; without an allocator it decodes into a new `char[]`. `WafAllocationTest` measures each, one virtual thread per evaluation.
 
 **This roadmap does not promise a ruleset.** Rule-language items below are capabilities to add; their

@@ -21,7 +21,8 @@ import java.util.List;
  *
  * <p>Matches the rules' keywords case-insensitively (A to Z) in the path, the query, the request URI
  * and every header value, each in the form received and after each round of percent-decoding
- * ({@code +} reads as a space). A value still changing after the permitted rounds is refused.
+ * ({@code +} reads as a space). A value still changing after the permitted rounds yields the PROTO-003 decision (a block in
+ * {@link WafMode#BLOCK}, a detection in {@link WafMode#DETECT}).
  *
  * <p>Allocation: a request none of whose values contains {@code %} or {@code +} allocates nothing, whether it is
  * clean or matches a rule or violates the protocol checks: the keyword scan reads primitive arrays and every
@@ -31,9 +32,10 @@ import java.util.List;
  * returned when the evaluation ends; nothing is kept between calls and no thread holds state, so the cost does not
  * depend on which thread evaluates or how long it lives. The borrow costs what the allocator charges for one: the
  * kernel's pooled buffers reuse their memory, and the objects that wrap it are the allocator's, not this class's.
- * The allocator is the one given at construction, else {@link KernelProviders#MEMORY_ALLOCATOR} when it is bound
- * where {@link #evaluate} runs, which the kernel does around every request handler. With neither, an evaluation
- * that needs room decodes into a new {@code char[]} of the size it needs. {@code WafAllocationTest} measures the
+ * The allocator is the one given to the constructor, else {@link KernelProviders#MEMORY_ALLOCATOR} when it is bound
+ * where {@link #evaluate} runs, which the kernel does around every request handler; the factories in
+ * {@code WafPolicies} give none, so a policy they build uses the bound one. With neither, an evaluation that needs
+ * room decodes into a new {@code char[]} of the size it needs. {@code WafAllocationTest} measures the
  * requests that need no borrow, and the borrowing ones against a recycling allocator, each on a new virtual thread
  * per evaluation.
  *
@@ -204,7 +206,8 @@ public final class DefaultWafPolicy implements WafPolicy {
     /**
      * Inspects a value as received and after each round of percent-decoding, so that a payload encoded more
      * than once is matched as the decoded form a backend would eventually act on. A value that is still
-     * changing after {@link #MAX_DECODE_ROUNDS} rounds is refused.
+     * changing after {@link #MAX_DECODE_ROUNDS} rounds yields the PROTO-003 decision (a block in {@link WafMode#BLOCK}, a
+     * detection in {@link WafMode#DETECT}).
      *
      * <p>The first decoding round reads the string and writes {@code room}; later rounds decode that room in
      * place, which is possible because decoding never lengthens a value.
