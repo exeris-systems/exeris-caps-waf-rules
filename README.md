@@ -7,17 +7,17 @@ Status: proof of concept, built against `exeris-kernel` 0.13.0-SNAPSHOT on JDK 2
 ## Where it sits
 
 - **Layer:** Layer 3 — Gateway policy, in the Tier 2 capability map of [`high-level-architecture.md`](https://github.com/exeris-systems/exeris-docs/blob/main/high-level-architecture.md) §3.2.
-- **Depends on:** nothing beyond `exeris-sdk-annotations` (`provided`). `WafPolicy` is a pure function from an immutable `WafRequest` to a `WafDecision` and has no transport, socket or kernel coupling.
+- **Depends on:** `exeris-kernel-spi` (the entitlement requirement, and the allocator that lends the room a percent-encoded value is decoded into) and `exeris-sdk-annotations` (`provided`). `WafPolicy` is a function from an immutable `WafRequest` to a `WafDecision`; the contract names no transport, socket or kernel type, and an evaluation keeps no state between calls.
 - **Provides** (`@Provides`, contract version 0.1.0): `WafPolicy`.
 - **Requires:** no other capability.
 - **Wall (ADR-055):** `eu.exeris.caps.waf.api` is the cross-cap surface; `eu.exeris.caps.waf.internal` is private, and a sibling cap reaching into it fails the build. No Spring, servlet, Netty or reactive type may appear (ADR-006).
 
 ## What the source contains
 
-- A `WafRule` belongs to a `WafCategory`: SQL injection, cross-site scripting, path traversal, remote code execution or protocol violation.
-- `WafMode` is `BLOCK` (reject the request), `DETECT` (inspect and flag without rejecting) or `DISABLED` (skip inspection).
+- A `WafRule` belongs to a `WafCategory`: SQL injection, cross-site scripting, path traversal, remote code execution, protocol violation or malicious header.
+- `WafMode` is `BLOCK` (a match yields a decision with `isAllowed() == false`), `DETECT` (a match yields an allowed decision that reports the first rule matched) or `DISABLED` (no inspection).
 - `WafPolicies` builds a policy from the built-in core rule set (`CoreWafRuleSet`) or from custom rules.
-- `DefaultWafPolicy` pre-filters the URI, query and headers with an Aho-Corasick keyword automaton (`FastKeywordTrie`) before it applies the rules.
+- `DefaultWafPolicy` matches the path, query, URI and header values, as received and percent-decoded, against an Aho-Corasick keyword automaton (`FastKeywordTrie`); evaluating a request none of whose values contains `%` or `+` allocates nothing, on any thread, and a request that does borrows its decode room once, as a `LoanedBuffer` from the kernel allocator, and returns it when the evaluation ends. The borrow allocates what the allocator allocates for one: with the Community allocator under 160 bytes per evaluation, the objects that wrap its pooled memory. Where no allocator is reachable the room is a new `char[]` per evaluation. `WafAllocationTest` measures each of these with one virtual thread per evaluation.
 
 ## Build & test
 

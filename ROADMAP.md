@@ -1,3 +1,12 @@
+---
+title: "exeris-caps-waf-rules — Roadmap"
+type: roadmap
+visibility: public
+owning-repo: exeris-caps-waf-rules
+status: active
+last-verified: 2026-10-15
+---
+
 # exeris-caps-waf-rules — Roadmap
 
 Status: **poc**. Version line: **0.1.x**. Licence: Exeris Commercial License (ADR-023), entitlement id
@@ -18,8 +27,12 @@ Layer 3 gateway policy cap. Provides `WafPolicy.evaluate(WafRequest) → WafDeci
 traversal, command execution, protocol violation, header abuse) matched by an Aho-Corasick-style automaton
 (`FastKeywordTrie`) over path, query and header values, with a URI-length limit and checks on request
 framing and URL-override headers. Percent-encoding is decoded in repeated rounds before matching, and a
-value still encoded after three rounds is refused. Detect mode reports the matched rule
-(`WafDecision.detect`). Zero runtime dependencies; no `@Requires`. 11 tests across two classes.
+value still encoded after three rounds yields a block, or in detect mode a detection. Detect mode reports the matched rule
+(`WafDecision.detect`). One compile dependency, `exeris-kernel-spi`, used for the `WafEntitlement` requirement and for the allocator that lends decode room; no
+`@Requires`. Evaluating a request none of whose values contains `%` or `+` allocates nothing, clean or matching; the automaton is a set of
+primitive arrays and every decision is built when the policy is constructed. A request that has such a value borrows its decode room
+once as a `LoanedBuffer` from the allocator the kernel binds around the request handler, and returns it when
+the evaluation ends; without an allocator it decodes into a new `char[]`. `WafAllocationTest` measures each, one virtual thread per evaluation.
 
 **This roadmap does not promise a ruleset.** Rule-language items below are capabilities to add; their
 size is decided as they are taken up.
@@ -43,7 +56,7 @@ size is decided as they are taken up.
 - [ ] `@Provides(WafPolicy)` at contract `0.1.0`
 - [ ] Kernel `0.13.0-SNAPSHOT`; SDK `0.12.0` and tooling `0.10.0` pins aligned
 - [ ] Artefacts stay `0.1.0-SNAPSHOT` until kernel `0.13.0` is released; a non-snapshot `0.1.0` is cut only after that
-- [ ] Licence enforcement: `WafRulesEntitlement` (id `exeris-caps-waf-rules`), `META-INF/services`
+- [ ] Licence enforcement: `WafEntitlement` (id `exeris-caps-waf-rules`), `META-INF/services`
       registration, TCK test and boot test against the kernel's Phase 0 gate
 - [ ] `build.yml` green on JDK 25 and 26; `cap-manifest.json` committed through the two-pass build
 
