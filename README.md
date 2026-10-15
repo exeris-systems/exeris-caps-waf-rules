@@ -14,7 +14,7 @@ Status: proof of concept, built against `exeris-kernel` 0.13.0-SNAPSHOT on JDK 2
 
 ## What the source contains
 
-- A `WafRule` belongs to a `WafCategory`: SQL injection, cross-site scripting, path traversal, remote code execution or protocol violation.
+- A `WafRule` belongs to a `WafCategory`: SQL injection, cross-site scripting, path traversal, remote code execution, protocol violation or malicious header.
 - `WafMode` is `BLOCK` (a match yields a decision with `isAllowed() == false`), `DETECT` (a match yields an allowed decision that reports the first rule matched) or `DISABLED` (no inspection).
 - `WafPolicies` builds a policy from the built-in core rule set (`CoreWafRuleSet`) or from custom rules.
 - `DefaultWafPolicy` matches the path, query, URI and header values, as received and percent-decoded, against an Aho-Corasick keyword automaton (`FastKeywordTrie`); evaluating a request allocates nothing in steady state.

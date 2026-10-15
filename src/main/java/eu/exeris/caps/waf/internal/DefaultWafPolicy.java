@@ -102,7 +102,7 @@ public final class DefaultWafPolicy implements WafPolicy {
             }
         }
 
-        // 3. Scan Headers (Names & Values)
+        // 3. Check header names against the restricted override headers; scan header values
         List<WafHeader> headers = request.headers();
         final int headerCount = headers.size();
         for (int i = 0; i < headerCount; i++) {
