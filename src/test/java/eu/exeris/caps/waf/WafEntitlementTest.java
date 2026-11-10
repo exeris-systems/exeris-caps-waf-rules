@@ -1,5 +1,6 @@
 package eu.exeris.caps.waf;
 
+import eu.exeris.kernel.spi.contract.EntitlementClass;
 import eu.exeris.kernel.spi.contract.EntitlementRequirement;
 import eu.exeris.kernel.tck.contract.AbstractEntitlementRequirementTck;
 import org.junit.jupiter.api.DisplayName;
@@ -34,5 +35,16 @@ class WafEntitlementTest extends AbstractEntitlementRequirementTck {
     void requiresOnlyItsOwnCapability() {
         assertThat(new WafEntitlement().requiredCapabilities()).containsExactly("exeris-caps-waf-rules");
         assertThat(WafEntitlement.CAPABILITY_ID).isEqualTo("exeris-caps-waf-rules");
+    }
+
+    @Test
+    @DisplayName("It declares the COMMERCIAL entitlement class, stable across calls")
+    void entitlementClassIsCommercialAndStable() {
+        WafEntitlement entitlement = new WafEntitlement();
+        EntitlementClass first = entitlement.entitlementClass();
+
+        assertThat(first).isEqualTo(EntitlementClass.COMMERCIAL);
+        assertThat(entitlement.entitlementClass()).isSameAs(first);
+        assertThat(new WafEntitlement().entitlementClass()).isEqualTo(EntitlementClass.COMMERCIAL);
     }
 }
