@@ -41,7 +41,7 @@ size is decided as they are taken up.
 
 | Constraint | Effect here | Owner |
 |---|---|---|
-| Kernel licence gate (ADR-088, ADR-089) in kernel `0.13.0-SNAPSHOT` | Entitlement resolvable only from that line | `exeris-kernel` |
+| Kernel licence gate (ADR-088, ADR-089), released in kernel `0.13.x` | Entitlement resolvable only from that line; this repo builds against `0.13.1` | `exeris-kernel` |
 | `RequestFilterChain` contract (ADR-099) | 0.2.0 binds to it | `exeris-caps-service-boundary-core` |
 | ADR on the response-side seam (gateway-core 0.2.0) | Entry condition: no policy cap starts its 0.2.0 before it is accepted | `exeris-caps-gateway-core`, `exeris-docs` |
 | HLA §3.2 lists `waf-rules` for Bot Blocker / API Gateway, but the HLA §3.3 API Gateway row and the whitepaper SKU composition omit it | The SKU already composes it | `exeris-docs` |
@@ -52,11 +52,11 @@ size is decided as they are taken up.
 ## 0.1.0 — the code PR
 
 - [ ] Defects found in the pre-import review are fixed in the import, each with a test
-- [ ] Code imported; repository files and ADR link stubs added
-- [ ] `@Provides(WafPolicy)` at contract `0.1.0`
-- [ ] Kernel `0.13.0-SNAPSHOT`; SDK `0.12.0` and tooling `0.10.0` pins aligned
-- [ ] Artefacts stay `0.1.0-SNAPSHOT` until kernel `0.13.0` is released; a non-snapshot `0.1.0` is cut only after that
-- [ ] Licence enforcement: `WafEntitlement` (id `exeris-caps-waf-rules`), `META-INF/services`
+- [x] Code imported; repository files and ADR link stubs added
+- [x] `@Provides(WafPolicy)` at contract `0.1.0`
+- [x] Kernel `0.13.1`, SDK `0.13.3` and tooling `0.11.0` pinned; all three resolve from Maven Central
+- [ ] Artefacts stay `0.1.0-SNAPSHOT`; kernel `0.13.x` is released, so a non-snapshot `0.1.0` waits only on the rest of this milestone
+- [x] Licence enforcement: `WafEntitlement` (id `exeris-caps-waf-rules`), `META-INF/services`
       registration, TCK test and boot test against the kernel's Phase 0 gate
 - [ ] `build.yml` green on JDK 25 and 26; `cap-manifest.json` committed through the two-pass build
 
